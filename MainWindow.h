@@ -22,6 +22,7 @@
 #include <QPainter>
 #include <QMouseEvent>
 #include <deque>
+#include <vector>
 
 // OpenCV
 #include <opencv2/opencv.hpp>
@@ -52,6 +53,49 @@ QProgressBar {
 QProgressBar::chunk { background-color: #00A8E8; border-radius: 3px; }
 )";
 
+// --- 帧提供者 (核心抽象层) ---
+// 统一处理 视频文件 vs 图片序列
+class FrameProvider {
+public:
+    FrameProvider();
+    ~FrameProvider();
+
+    // 初始化：如果是视频传 path，如果是序列传 list
+    bool openVideo(const QString &path);
+    bool openSequence(const QStringList &files);
+
+    void close();
+    bool isOpened() const;
+
+    // 获取信息
+    int totalFrames() const;
+    double fps() const; // 序列默认 24 或 30
+    int width() const;
+    int height() const;
+    bool isVideo() const { return m_isVideo; }
+    QString getSourcePath() const; // 返回视频路径或第一张图片路径
+
+    // 读取帧
+    bool read(cv::Mat &image);
+    bool seek(int frameIndex); // 跳转
+
+private:
+    bool m_isVideo;
+
+    // 视频模式资源
+    cv::VideoCapture *m_cap;
+
+    // 序列模式资源
+    QStringList m_files;
+    int m_currentIndex;
+
+    // 缓存信息
+    int m_total;
+    int m_w, m_h;
+    double m_fps;
+    QString m_mainPath;
+};
+
 // --- 拖拽标签 ---
 class DropLabel : public QLabel {
     Q_OBJECT
@@ -62,11 +106,12 @@ protected:
     void dropEvent(QDropEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
 signals:
-    void fileDropped(QString path);
+    // 修改：返回列表（可能是单文件也可能是多文件）
+    void filesDropped(QStringList paths);
     void clicked();
 };
 
-// --- 可视化裁剪编辑器 (增强版) ---
+// --- 可视化裁剪编辑器 ---
 class CropEditorDialog : public QDialog {
     Q_OBJECT
 public:
@@ -86,54 +131,43 @@ private:
     int m_offsetX, m_offsetY;
     QRect m_selectionRect;
 
-    // 交互状态管理
     enum EditMode { ModeNone, ModeDrawing, ModeMoving, ModeResizing };
-    // 调整手柄位置
-    enum ResizeHandle {
-        HandleNone,
-        HandleTop, HandleBottom, HandleLeft, HandleRight,
-        HandleTopLeft, HandleTopRight, HandleBottomLeft, HandleBottomRight,
-        HandleInside
-    };
-
+    enum ResizeHandle { HandleNone, HandleTop, HandleBottom, HandleLeft, HandleRight, HandleTopLeft, HandleTopRight, HandleBottomLeft, HandleBottomRight, HandleInside };
     EditMode m_mode;
     ResizeHandle m_activeHandle;
     QPoint m_lastMousePos;
-    QPoint m_startPos; // 用于新建绘制的起点
+    QPoint m_startPos;
 
-    // 辅助函数
     ResizeHandle hitTest(const QPoint &pos);
     void updateCursorIcon(const QPoint &pos);
-    QRect getImageRect(); // 图片在窗口中的显示区域
+    QRect getImageRect();
 };
 
-// --- 渲染配置对话框 ---
+// --- 渲染设置结构体 ---
 struct RenderSettings {
     int targetHeight;
     bool exportVideo;
     bool exportLivePhoto;
     bool useOpenCL;
     QString outputFormat;
-
     int startFrame;
     int endFrame;
-
     int cropRatioMode;
     QRect manualCropRect;
 };
 
+// --- 渲染配置对话框 ---
 class RenderConfigDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit RenderConfigDialog(QString videoPath, QWidget *parent = nullptr);
-    ~RenderConfigDialog();
+    // 修改构造：接收 FrameProvider 指针，而不是简单的路径
+    explicit RenderConfigDialog(FrameProvider *provider, QWidget *parent = nullptr);
     RenderSettings getSettings();
 
 private slots:
     void updateDurationLabel();
     void onCropModeChanged(int index);
     void openCropEditor();
-
     void onTimelineChanged(int value);
     void onSetStartClicked();
     void onSetEndClicked();
@@ -154,15 +188,12 @@ private:
     QPushButton *m_btnEditCrop;
     QRect m_currentManualRect;
 
-    cv::VideoCapture m_previewCap;
+    // 预览不再拥有自己的 Cap，而是使用传入的 Provider（需要注意线程安全，但这都在主线程）
+    FrameProvider *m_provider;
+
     QLabel *m_lblVideoPreview;
     QSlider *m_sliderTimeline;
     QLabel *m_lblCurrentFrame;
-
-    QString m_videoPath;
-    int m_totalFrames;
-    double m_fps;
-    int m_srcW, m_srcH;
 };
 
 // --- 视频写入工作线程 ---
@@ -172,10 +203,8 @@ public:
     VideoWriterWorker(QString path, int w, int h, double fps, bool isMov);
     void addFrame(const cv::Mat &frame);
     void stop();
-
 protected:
     void run() override;
-
 private:
     QString m_path;
     int m_width, m_height;
@@ -188,14 +217,17 @@ private:
 
 // --- 主处理线程 ---
 struct ProcessParams {
-    QString inPath;
+    // 移除单一 inPath，改为更灵活的输入
+    bool isVideo;
+    QString videoPath;
+    QStringList imageFiles; // 序列模式
+
     QString outPath;
     int trailLength;
     double fadeStrength;
     int targetRes;
     bool isMov;
     bool useOpenCL;
-
     int startFrame;
     int endFrame;
     cv::Rect finalCropRect;
@@ -228,11 +260,9 @@ public:
     explicit CoverSelectorDialog(QString videoPath, QWidget *parent = nullptr);
     ~CoverSelectorDialog();
     cv::Mat getSelectedImage();
-
 private slots:
     void onSliderValueChanged(int value);
     void updatePreview();
-
 private:
     QString m_videoPath;
     cv::VideoCapture *m_cap;
@@ -253,8 +283,8 @@ public:
     ~MainWindow();
 
 private slots:
-    void onFileDropped(QString path);
-    void selectInputFile();
+    void onFilesDropped(QStringList paths); // 修改槽函数签名
+    void selectInput(); // 统称
     void selectOutputPath();
 
     void onProcessingFinished(QString outPath);
@@ -278,7 +308,9 @@ private:
     QProgressBar *m_progressBar;
 
     ProcessorThread *m_processor;
-    QString m_inPath;
+
+    // 输入源管理
+    FrameProvider *m_inputProvider;
 
     bool m_wantLivePhoto;
     bool m_wantVideo;
