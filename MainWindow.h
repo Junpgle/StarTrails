@@ -19,11 +19,13 @@
 #include <QRadioButton>
 #include <QCheckBox>
 #include <QButtonGroup>
+#include <QPainter>
+#include <QMouseEvent>
 #include <deque>
 
 // OpenCV
 #include <opencv2/opencv.hpp>
-#include <opencv2/core/ocl.hpp> // OpenCL 支持
+#include <opencv2/core/ocl.hpp>
 
 // --- 样式表 ---
 const QString ULTRA_DARK_STYLE = R"(
@@ -58,26 +60,83 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
-    void mousePressEvent(QMouseEvent *event) override; // 点击也可以选择文件
+    void mousePressEvent(QMouseEvent *event) override;
 signals:
     void fileDropped(QString path);
     void clicked();
 };
 
-// --- 渲染配置对话框 (新) ---
+// --- 可视化裁剪编辑器 (增强版) ---
+class CropEditorDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit CropEditorDialog(const cv::Mat &frame, QRect currentRect, QWidget *parent = nullptr);
+    QRect getFinalCropRect();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
+private:
+    QImage m_displayImage;
+    cv::Mat m_origFrame;
+    double m_scaleFactor;
+    int m_offsetX, m_offsetY;
+    QRect m_selectionRect;
+
+    // 交互状态管理
+    enum EditMode { ModeNone, ModeDrawing, ModeMoving, ModeResizing };
+    // 调整手柄位置
+    enum ResizeHandle {
+        HandleNone,
+        HandleTop, HandleBottom, HandleLeft, HandleRight,
+        HandleTopLeft, HandleTopRight, HandleBottomLeft, HandleBottomRight,
+        HandleInside
+    };
+
+    EditMode m_mode;
+    ResizeHandle m_activeHandle;
+    QPoint m_lastMousePos;
+    QPoint m_startPos; // 用于新建绘制的起点
+
+    // 辅助函数
+    ResizeHandle hitTest(const QPoint &pos);
+    void updateCursorIcon(const QPoint &pos);
+    QRect getImageRect(); // 图片在窗口中的显示区域
+};
+
+// --- 渲染配置对话框 ---
 struct RenderSettings {
-    int targetHeight; // 0=Original, 1080, 720
+    int targetHeight;
     bool exportVideo;
     bool exportLivePhoto;
-    bool useOpenCL;   // GPU加速
-    QString outputFormat; // .mp4 or .mov
+    bool useOpenCL;
+    QString outputFormat;
+
+    int startFrame;
+    int endFrame;
+
+    int cropRatioMode;
+    QRect manualCropRect;
 };
 
 class RenderConfigDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit RenderConfigDialog(QWidget *parent = nullptr);
+    explicit RenderConfigDialog(QString videoPath, QWidget *parent = nullptr);
+    ~RenderConfigDialog();
     RenderSettings getSettings();
+
+private slots:
+    void updateDurationLabel();
+    void onCropModeChanged(int index);
+    void openCropEditor();
+
+    void onTimelineChanged(int value);
+    void onSetStartClicked();
+    void onSetEndClicked();
 
 private:
     QComboBox *m_cmbRes;
@@ -86,13 +145,31 @@ private:
     QRadioButton *m_rbBoth;
     QCheckBox *m_chkOpenCL;
     QComboBox *m_cmbFormat;
+
+    QSpinBox *m_spinStartFrame;
+    QSpinBox *m_spinEndFrame;
+    QLabel *m_lblDuration;
+
+    QComboBox *m_cmbCropRatio;
+    QPushButton *m_btnEditCrop;
+    QRect m_currentManualRect;
+
+    cv::VideoCapture m_previewCap;
+    QLabel *m_lblVideoPreview;
+    QSlider *m_sliderTimeline;
+    QLabel *m_lblCurrentFrame;
+
+    QString m_videoPath;
+    int m_totalFrames;
+    double m_fps;
+    int m_srcW, m_srcH;
 };
 
 // --- 视频写入工作线程 ---
 class VideoWriterWorker : public QThread {
     Q_OBJECT
 public:
-    VideoWriterWorker(QString path, int srcW, int srcH, double fps, int targetH, bool isMov);
+    VideoWriterWorker(QString path, int w, int h, double fps, bool isMov);
     void addFrame(const cv::Mat &frame);
     void stop();
 
@@ -101,7 +178,7 @@ protected:
 
 private:
     QString m_path;
-    int m_srcW, m_srcH, m_targetW, m_targetH;
+    int m_width, m_height;
     double m_fps;
     bool m_running;
     QQueue<cv::Mat> m_queue;
@@ -109,15 +186,19 @@ private:
     QWaitCondition m_condition;
 };
 
-// --- 主处理线程 (支持 UMat 加速) ---
+// --- 主处理线程 ---
 struct ProcessParams {
     QString inPath;
     QString outPath;
     int trailLength;
     double fadeStrength;
-    int targetRes; // 目标高度
+    int targetRes;
     bool isMov;
-    bool useOpenCL; // 启用 GPU
+    bool useOpenCL;
+
+    int startFrame;
+    int endFrame;
+    cv::Rect finalCropRect;
 };
 
 class ProcessorThread : public QThread {
@@ -173,8 +254,8 @@ public:
 
 private slots:
     void onFileDropped(QString path);
-    void selectInputFile();     // 导入逻辑
-    void selectOutputPath();    // 导出逻辑(启动渲染对话框)
+    void selectInputFile();
+    void selectOutputPath();
 
     void onProcessingFinished(QString outPath);
     void onPreviewUpdated(QImage img);
@@ -183,9 +264,8 @@ private slots:
 private:
     void setupUi();
     void startRenderPipeline(RenderSettings settings, QString savePath);
-    void exportLivePhotoFlow(QString videoPath); // 实况导出流程
+    void exportLivePhotoFlow(QString videoPath);
 
-    // UI Components
     DropLabel *m_dropLabel;
     QLabel *m_lblFileName;
     QSpinBox *m_spinTrail;
@@ -200,7 +280,6 @@ private:
     ProcessorThread *m_processor;
     QString m_inPath;
 
-    // 暂存用户的导出意图
     bool m_wantLivePhoto;
     bool m_wantVideo;
 };
