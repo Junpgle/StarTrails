@@ -440,7 +440,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), m_inputProvider(n
 }
 MainWindow::~MainWindow() { if(m_processor->isRunning()) { m_processor->stop(); m_processor->wait(); } delete m_inputProvider; }
 void MainWindow::setupUi() {
-    setWindowTitle("StarTrail Pro (Raw/DNG Support)"); resize(1100, 750); setStyleSheet(ULTRA_DARK_STYLE);
+    setWindowTitle("StarTrail v1.0.0"); resize(1100, 750); setStyleSheet(ULTRA_DARK_STYLE);
     QWidget *cen = new QWidget; setCentralWidget(cen); QHBoxLayout *mainLay = new QHBoxLayout(cen); mainLay->setContentsMargins(0,0,0,0); mainLay->setSpacing(0);
     QFrame *side = new QFrame; side->setFixedWidth(320); side->setStyleSheet("background: #181818; border-right: 1px solid #333;");
     QVBoxLayout *sLay = new QVBoxLayout(side); sLay->setContentsMargins(15,25,15,25); sLay->setSpacing(15);

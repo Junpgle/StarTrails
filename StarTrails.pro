@@ -34,3 +34,6 @@ HEADERS += \
 
 # 禁用控制台窗口 (发布时)
 # CONFIG += windows
+
+DISTFILES += \
+    Readme.md
