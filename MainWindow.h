@@ -53,43 +53,36 @@ QProgressBar {
 QProgressBar::chunk { background-color: #00A8E8; border-radius: 3px; }
 )";
 
-// --- 帧提供者 (核心抽象层) ---
-// 统一处理 视频文件 vs 图片序列
+// --- 动态照片合成器 (新算法) ---
+class MotionPhotoMuxer {
+public:
+    // 将 jpg 和 mp4 合并为一个 Google Motion Photo (JPG文件)
+    static bool mux(const QString &jpgPath, const QString &mp4Path, const QString &outPath);
+};
+
+// --- 帧提供者 ---
 class FrameProvider {
 public:
     FrameProvider();
     ~FrameProvider();
-
-    // 初始化：如果是视频传 path，如果是序列传 list
     bool openVideo(const QString &path);
     bool openSequence(const QStringList &files);
-
     void close();
     bool isOpened() const;
-
-    // 获取信息
     int totalFrames() const;
-    double fps() const; // 序列默认 24 或 30
+    double fps() const;
     int width() const;
     int height() const;
     bool isVideo() const { return m_isVideo; }
-    QString getSourcePath() const; // 返回视频路径或第一张图片路径
-
-    // 读取帧
+    QString getSourcePath() const;
     bool read(cv::Mat &image);
-    bool seek(int frameIndex); // 跳转
+    bool seek(int frameIndex);
 
 private:
     bool m_isVideo;
-
-    // 视频模式资源
     cv::VideoCapture *m_cap;
-
-    // 序列模式资源
     QStringList m_files;
     int m_currentIndex;
-
-    // 缓存信息
     int m_total;
     int m_w, m_h;
     double m_fps;
@@ -106,7 +99,6 @@ protected:
     void dropEvent(QDropEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
 signals:
-    // 修改：返回列表（可能是单文件也可能是多文件）
     void filesDropped(QStringList paths);
     void clicked();
 };
@@ -154,14 +146,15 @@ struct RenderSettings {
     int endFrame;
     int cropRatioMode;
     QRect manualCropRect;
+    double targetFps;
 };
 
 // --- 渲染配置对话框 ---
 class RenderConfigDialog : public QDialog {
     Q_OBJECT
 public:
-    // 修改构造：接收 FrameProvider 指针，而不是简单的路径
     explicit RenderConfigDialog(FrameProvider *provider, QWidget *parent = nullptr);
+    ~RenderConfigDialog();
     RenderSettings getSettings();
 
 private slots:
@@ -179,6 +172,7 @@ private:
     QRadioButton *m_rbBoth;
     QCheckBox *m_chkOpenCL;
     QComboBox *m_cmbFormat;
+    QDoubleSpinBox *m_spinFps;
 
     QSpinBox *m_spinStartFrame;
     QSpinBox *m_spinEndFrame;
@@ -188,7 +182,6 @@ private:
     QPushButton *m_btnEditCrop;
     QRect m_currentManualRect;
 
-    // 预览不再拥有自己的 Cap，而是使用传入的 Provider（需要注意线程安全，但这都在主线程）
     FrameProvider *m_provider;
 
     QLabel *m_lblVideoPreview;
@@ -217,10 +210,9 @@ private:
 
 // --- 主处理线程 ---
 struct ProcessParams {
-    // 移除单一 inPath，改为更灵活的输入
     bool isVideo;
     QString videoPath;
-    QStringList imageFiles; // 序列模式
+    QStringList imageFiles;
 
     QString outPath;
     int trailLength;
@@ -231,6 +223,7 @@ struct ProcessParams {
     int startFrame;
     int endFrame;
     cv::Rect finalCropRect;
+    double targetFps;
 };
 
 class ProcessorThread : public QThread {
@@ -283,8 +276,8 @@ public:
     ~MainWindow();
 
 private slots:
-    void onFilesDropped(QStringList paths); // 修改槽函数签名
-    void selectInput(); // 统称
+    void onFilesDropped(QStringList paths);
+    void selectInput();
     void selectOutputPath();
 
     void onProcessingFinished(QString outPath);
@@ -308,8 +301,6 @@ private:
     QProgressBar *m_progressBar;
 
     ProcessorThread *m_processor;
-
-    // 输入源管理
     FrameProvider *m_inputProvider;
 
     bool m_wantLivePhoto;
