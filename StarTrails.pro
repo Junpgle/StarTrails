@@ -7,15 +7,23 @@ CONFIG += c++17
 TARGET = StarTrailsCpp
 TEMPLATE = app
 
-# --- OpenCV 配置 (请根据实际路径修改) ---
-# Windows 示例:
+# --- OpenCV 配置 ---
+
+# 1. 头文件路径 (请确认路径存在)
 INCLUDEPATH += D:/opencv/build/include
-LIBS += -LD:/opencv/build/x64/vc16/lib -lopencv_world460
-#
-# Mac/Linux (通常使用 pkg-config):
-# CONFIG += link_pkgconfig
-# PKGCONFIG += opencv4
-# ------------------------------------
+
+# 2. 库文件路径
+LIBS += -LD:/opencv/build/x64/vc16/lib
+
+# 3. 智能链接：Debug 模式链 debug 库，Release 模式链 release 库
+# 请务必根据你实际的文件名修改版本号 (例如 4100, 460, 480)
+CONFIG(debug, debug|release) {
+    # Debug 模式 (带 d)
+    LIBS += -lopencv_world4120d
+} else {
+    # Release 模式 (不带 d)
+    LIBS += -lopencv_world4120
+}
 
 SOURCES += \
     MainWindow.cpp \

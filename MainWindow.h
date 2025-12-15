@@ -16,16 +16,19 @@
 #include <QSlider>
 #include <QDragEnterEvent>
 #include <QMimeData>
-#include <QDebug>
+#include <QRadioButton>
+#include <QCheckBox>
+#include <QButtonGroup>
 #include <deque>
 
 // OpenCV
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/ocl.hpp> // OpenCL 支持
 
 // --- 样式表 ---
 const QString ULTRA_DARK_STYLE = R"(
 QMainWindow, QDialog { background-color: #181818; }
-QWidget { color: #E0E0E0; font-family: "Segoe UI", sans-serif; font-size: 13px; }
+QWidget { color: #E0E0E0; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 13px; }
 QGroupBox {
     border: 1px solid #333; border-radius: 6px; margin-top: 22px;
     background-color: #202020; font-weight: bold; color: #00A8E8;
@@ -45,19 +48,9 @@ QProgressBar {
     border: none; background-color: #1A1A1A; height: 6px; border-radius: 3px;
 }
 QProgressBar::chunk { background-color: #00A8E8; border-radius: 3px; }
-QSlider::groove:horizontal {
-    border: 1px solid #333; height: 6px; background: #1A1A1A; margin: 2px 0; border-radius: 3px;
-}
-QSlider::handle:horizontal {
-    background: #00A8E8; width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
-}
-QLabel#DropZone {
-    border: 2px dashed #444; border-radius: 10px; color: #666; font-size: 16px;
-}
-QLabel#DropZone:hover { border-color: #00A8E8; color: #00A8E8; background-color: #252525; }
 )";
 
-// --- 拖拽标签控件 ---
+// --- 拖拽标签 ---
 class DropLabel : public QLabel {
     Q_OBJECT
 public:
@@ -65,11 +58,37 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override; // 点击也可以选择文件
 signals:
     void fileDropped(QString path);
+    void clicked();
 };
 
-// --- 视频写入线程 ---
+// --- 渲染配置对话框 (新) ---
+struct RenderSettings {
+    int targetHeight; // 0=Original, 1080, 720
+    bool exportVideo;
+    bool exportLivePhoto;
+    bool useOpenCL;   // GPU加速
+    QString outputFormat; // .mp4 or .mov
+};
+
+class RenderConfigDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit RenderConfigDialog(QWidget *parent = nullptr);
+    RenderSettings getSettings();
+
+private:
+    QComboBox *m_cmbRes;
+    QRadioButton *m_rbVideoOnly;
+    QRadioButton *m_rbLivePhoto;
+    QRadioButton *m_rbBoth;
+    QCheckBox *m_chkOpenCL;
+    QComboBox *m_cmbFormat;
+};
+
+// --- 视频写入工作线程 ---
 class VideoWriterWorker : public QThread {
     Q_OBJECT
 public:
@@ -82,25 +101,23 @@ protected:
 
 private:
     QString m_path;
-    int m_srcW, m_srcH;
+    int m_srcW, m_srcH, m_targetW, m_targetH;
     double m_fps;
-    int m_targetW, m_targetH;
-    bool m_isMov;
     bool m_running;
-
     QQueue<cv::Mat> m_queue;
     QMutex m_mutex;
     QWaitCondition m_condition;
 };
 
-// --- 主处理线程 ---
+// --- 主处理线程 (支持 UMat 加速) ---
 struct ProcessParams {
     QString inPath;
     QString outPath;
     int trailLength;
     double fadeStrength;
-    int targetRes;
+    int targetRes; // 目标高度
     bool isMov;
+    bool useOpenCL; // 启用 GPU
 };
 
 class ProcessorThread : public QThread {
@@ -141,7 +158,6 @@ private:
     int m_totalFrames;
     int m_currentIdx;
     cv::Mat m_selectedFrame;
-
     QLabel *m_lblPreview;
     QLabel *m_lblInfo;
     QSlider *m_slider;
@@ -157,35 +173,36 @@ public:
 
 private slots:
     void onFileDropped(QString path);
-    void selectFile();
-    void startProcessing();
+    void selectInputFile();     // 导入逻辑
+    void selectOutputPath();    // 导出逻辑(启动渲染对话框)
+
     void onProcessingFinished(QString outPath);
     void onPreviewUpdated(QImage img);
     void onProgress(int current, int total, double fps);
-    void makeLivePhoto();
 
 private:
     void setupUi();
-    void exportLivePhoto(const cv::Mat &coverImg);
+    void startRenderPipeline(RenderSettings settings, QString savePath);
+    void exportLivePhotoFlow(QString videoPath); // 实况导出流程
 
-    // UI Elements
+    // UI Components
     DropLabel *m_dropLabel;
-    QLabel *m_lblFile;
+    QLabel *m_lblFileName;
     QSpinBox *m_spinTrail;
     QDoubleSpinBox *m_spinFade;
-    QComboBox *m_cmbRes;
-    QComboBox *m_cmbFmt;
-    QPushButton *m_btnRun;
-    QPushButton *m_btnLive;
+    QPushButton *m_btnStart;
+
     QLabel *m_lblPreview;
     QLabel *m_lblStatus;
     QLabel *m_lblSpeed;
     QProgressBar *m_progressBar;
 
-    // Logic
     ProcessorThread *m_processor;
     QString m_inPath;
-    QString m_lastVideoPath;
+
+    // 暂存用户的导出意图
+    bool m_wantLivePhoto;
+    bool m_wantVideo;
 };
 
 #endif // MAINWINDOW_H
