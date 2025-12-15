@@ -1,3 +1,4 @@
+# 这是一个没什么用的初版python-QT文件,基于PYQT6构建,可以单文件直接运行
 import sys
 import cv2
 import numpy as np

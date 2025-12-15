@@ -36,4 +36,5 @@ HEADERS += \
 # CONFIG += windows
 
 DISTFILES += \
-    Readme.md
+    Readme.md \
+    star.py
